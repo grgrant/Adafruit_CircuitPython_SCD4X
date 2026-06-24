@@ -164,7 +164,8 @@ class SCD4X:
     def reinit(self) -> None:
         """Reinitializes the sensor by reloading user settings from EEPROM."""
         self.stop_periodic_measurement()
-        self._send_command(_SCD4X_REINIT, cmd_delay=0.02)
+        # Execution time raised from 20 ms to 30 ms in the v1.7 datasheet (Table 30).
+        self._send_command(_SCD4X_REINIT, cmd_delay=0.03)
 
     def factory_reset(self) -> None:
         """Resets all configuration settings stored in the EEPROM and erases the
@@ -172,18 +173,28 @@ class SCD4X:
         self.stop_periodic_measurement()
         self._send_command(_SCD4X_FACTORYRESET, cmd_delay=1.2)
 
-    def force_calibration(self, target_co2: int) -> None:
-        """Forces the sensor to recalibrate with a given current CO2"""
+    def force_calibration(self, target_co2: int) -> int:
+        """Forces the sensor to recalibrate to a known CO2 level in PPM.
+
+        Returns the FRC correction the sensor applied, in PPM (this value may be
+        negative). Before calling, the sensor must have been operated in a
+        measurement mode for more than 3 minutes in a stable, homogeneous CO2
+        environment, otherwise the recalibration will fail.
+
+        :raises RuntimeError: if the sensor reports that the recalibration failed.
+        """
         self.stop_periodic_measurement()
         self._set_command_value(_SCD4X_FORCEDRECAL, target_co2)
         time.sleep(0.5)
         self._read_reply(self._buffer, 3)
-        correction = struct.unpack_from(">h", self._buffer[0:2])[0]
+        # The raw word is unsigned; a value of 0xffff signals a failed FRC, and
+        # the correction is the raw word minus the 0x8000 bias (datasheet 3.8.1).
+        correction = struct.unpack_from(">H", self._buffer[0:2])[0]
         if correction == 0xFFFF:
             raise RuntimeError(
-                "Forced recalibration failed.\
-            Make sure sensor is active for 3 minutes first"
+                "Forced recalibration failed. Make sure sensor is active for 3 minutes first"
             )
+        return correction - 0x8000
 
     @property
     def self_calibration_enabled(self) -> bool:
