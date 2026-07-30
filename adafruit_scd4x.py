@@ -485,7 +485,6 @@ class SCD4X:
         Deprecated in favor of :attr:`ambient_pressure <adafruit_scd4x.SCD4X.ambient_pressure>`"""
         self.ambient_pressure = ambient_pressure
 
-
     @property
     def temperature_offset(self) -> float:
         """Specifies the offset to be added to the reported measurements to account for a bias in
