@@ -63,6 +63,20 @@ _SCD4X_GETASCE = const(0x2313)
 _SCD4X_SETASCE = const(0x2416)
 _SCD4X_MEASURESINGLESHOT = const(0x219D)
 _SCD4X_MEASURESINGLESHOTRHTONLY = const(0x2196)
+_SCD4X_POWERDOWN = const(0x36E0)
+_SCD4X_WAKEUP = const(0x36F6)
+_SCD4X_GETPRESSURE = const(0xE000)  # shares its opcode with _SCD4X_SETPRESSURE
+_SCD4X_GETASCTARGET = const(0x233F)
+_SCD4X_SETASCTARGET = const(0x243A)
+_SCD4X_GETASCINITIALPERIOD = const(0x2340)
+_SCD4X_SETASCINITIALPERIOD = const(0x2445)
+_SCD4X_GETASCSTANDARDPERIOD = const(0x234B)
+_SCD4X_SETASCSTANDARDPERIOD = const(0x244E)
+_SCD4X_GETSENSORVARIANT = const(0x202F)
+
+# Variant code (bits 15:12 of the get_sensor_variant word) to ASCII name,
+# per the SCD4x datasheet v1.7 Table 31.
+_SCD4X_VARIANTS = {0x0: "SCD40", 0x1: "SCD41", 0x5: "SCD43"}
 
 
 class SCD4X:
@@ -99,6 +113,20 @@ class SCD4X:
                 temperature = scd.temperature
                 relative_humidity = scd.relative_humidity
                 co2_ppm_level = scd.CO2
+
+    .. note::
+
+        Some features are available on the **SCD41 and SCD43 only**, not the base
+        SCD40:
+
+        * :meth:`measure_single_shot`
+        * :meth:`measure_single_shot_rht_only`
+        * :meth:`power_down`
+        * :meth:`wake_up`
+
+        A base SCD40 may execute these commands without raising, but the results
+        are unspecified. Use :attr:`sensor_variant_name` to detect the part at
+        runtime before relying on them.
 
     """
 
@@ -152,19 +180,54 @@ class SCD4X:
         return self._relative_humidity
 
     def measure_single_shot(self) -> None:
-        """On-demand measurement of CO2 concentration, relative humidity, and
-        temperature for SCD41 only"""
+        """On-demand measurement of CO2 concentration, relative humidity, and temperature.
+
+        Single shot measurement is available on the **SCD41 and SCD43 only**. A
+        base SCD40 may execute this command without raising, but the returned
+        values are unspecified and uncalibrated; confirm the part with
+        :attr:`sensor_variant_name` before relying on it.
+        """
         self._send_command(_SCD4X_MEASURESINGLESHOT, cmd_delay=5)
 
     def measure_single_shot_rht_only(self) -> None:
-        """On-demand measurement of relative humidity and temperature for
-        SCD41 only"""
+        """On-demand measurement of relative humidity and temperature only.
+
+        Available on the **SCD41 and SCD43 only** (see :meth:`measure_single_shot`
+        for the variant caveat). This command does not produce a CO2 value.
+        """
         self._send_command(_SCD4X_MEASURESINGLESHOTRHTONLY, cmd_delay=0.05)
+
+    def power_down(self) -> None:
+        """Put the sensor from idle into sleep mode to reduce current draw.
+
+        Intended for power-cycled single shot operation (SCD41/SCD43). The
+        sensor must be in the idle state when this is called. Wake it again
+        with :meth:`wake_up`.
+        """
+        self._send_command(_SCD4X_POWERDOWN, cmd_delay=0.001)
+
+    def wake_up(self) -> None:
+        """Wake the sensor from sleep mode back into the idle state (SCD41/SCD43).
+
+        The SCD4x does not acknowledge this command, so the resulting I2C NACK
+        is expected and ignored here. To confirm the sensor actually reached the
+        idle state, read :attr:`serial_number` afterwards. Call this before
+        :meth:`measure_single_shot` if the sensor was previously powered down.
+        """
+        self._cmd[0] = (_SCD4X_WAKEUP >> 8) & 0xFF
+        self._cmd[1] = _SCD4X_WAKEUP & 0xFF
+        try:
+            with self.i2c_device as i2c:
+                i2c.write(self._cmd, end=2)
+        except OSError:
+            # The sensor does not ACK wake_up; the NACK is expected, not an error.
+            pass
+        time.sleep(0.03)  # wake_up execution time
 
     def reinit(self) -> None:
         """Reinitializes the sensor by reloading user settings from EEPROM."""
         self.stop_periodic_measurement()
-        # Execution time raised from 20 ms to 30 ms in the v1.7 datasheet (Table 30).
+        # Execution time raised from 20 ms to 30 ms in the v1.7 datasheet (Table 9).
         self._send_command(_SCD4X_REINIT, cmd_delay=0.03)
 
     def factory_reset(self) -> None:
@@ -184,8 +247,7 @@ class SCD4X:
         :raises RuntimeError: if the sensor reports that the recalibration failed.
         """
         self.stop_periodic_measurement()
-        self._set_command_value(_SCD4X_FORCEDRECAL, target_co2)
-        time.sleep(0.5)
+        self._set_command_value(_SCD4X_FORCEDRECAL, target_co2, cmd_delay=0.5)
         self._read_reply(self._buffer, 3)
         # The raw word is unsigned; a value of 0xffff signals a failed FRC, and
         # the correction is the raw word minus the 0x8000 bias (datasheet 3.8.1).
@@ -214,6 +276,70 @@ class SCD4X:
     @self_calibration_enabled.setter
     def self_calibration_enabled(self, enabled: bool) -> None:
         self._set_command_value(_SCD4X_SETASCE, enabled)
+
+    @property
+    def self_calibration_target(self) -> int:
+        """The ASC baseline target CO2 concentration in PPM. Default is 400.
+
+        This is the lower-bound background CO2 level the ASC algorithm assumes
+        the sensor is regularly exposed to within one ASC period.
+
+        .. note::
+            Only available in idle mode. This value will NOT be saved and will
+            be reset on boot unless saved with persist_settings().
+
+        """
+        self._send_command(_SCD4X_GETASCTARGET, cmd_delay=0.001)
+        self._read_reply(self._buffer, 3)
+        return (self._buffer[0] << 8) | self._buffer[1]
+
+    @self_calibration_target.setter
+    def self_calibration_target(self, target_co2: int) -> None:
+        self._set_command_value(_SCD4X_SETASCTARGET, target_co2)
+
+    @property
+    def self_calibration_initial_period(self) -> int:
+        """The ASC initial period in hours. Default is 44. Must be a multiple of 4.
+
+        Mainly relevant for single shot operation, where the parameter assumes a
+        5 minute measurement interval and must be scaled for other intervals
+        (see datasheet v1.7 Section 3.11.5). A value of 0 forces an immediate
+        correction.
+
+        .. note::
+            Only available in idle mode. This value will NOT be saved and will
+            be reset on boot unless saved with persist_settings().
+
+        """
+        self._send_command(_SCD4X_GETASCINITIALPERIOD, cmd_delay=0.001)
+        self._read_reply(self._buffer, 3)
+        return (self._buffer[0] << 8) | self._buffer[1]
+
+    @self_calibration_initial_period.setter
+    def self_calibration_initial_period(self, hours: int) -> None:
+        self._set_command_value(_SCD4X_SETASCINITIALPERIOD, hours)
+
+    @property
+    def self_calibration_standard_period(self) -> int:
+        """The ASC standard period in hours. Default is 156. Must be a multiple of 4.
+
+        Mainly relevant for single shot operation, where the parameter assumes a
+        5 minute measurement interval and must be scaled for other intervals
+        (see datasheet v1.7 Section 3.11.7). A value of 0 forces an immediate
+        correction.
+
+        .. note::
+            Only available in idle mode. This value will NOT be saved and will
+            be reset on boot unless saved with persist_settings().
+
+        """
+        self._send_command(_SCD4X_GETASCSTANDARDPERIOD, cmd_delay=0.001)
+        self._read_reply(self._buffer, 3)
+        return (self._buffer[0] << 8) | self._buffer[1]
+
+    @self_calibration_standard_period.setter
+    def self_calibration_standard_period(self, hours: int) -> None:
+        self._set_command_value(_SCD4X_SETASCSTANDARDPERIOD, hours)
 
     def self_test(self) -> None:
         """Performs a self test, takes up to 10 seconds"""
@@ -257,6 +383,36 @@ class SCD4X:
             self._buffer[7],
         )
 
+    @property
+    def sensor_variant(self) -> int:
+        """Read the sensor variant code (bits 15:12 of the variant word).
+
+        Returns the 4-bit code: ``0`` = SCD40, ``1`` = SCD41, ``5`` = SCD43.
+        See :attr:`sensor_variant_name` for the ASCII name.
+
+        .. note::
+            Only available in idle mode.
+
+        """
+        self._send_command(_SCD4X_GETSENSORVARIANT, cmd_delay=0.001)
+        self._read_reply(self._buffer, 3)
+        # Variant is in bits 15:12 of word[0]; bits 11:0 are reserved.
+        return self._buffer[0] >> 4
+
+    @property
+    def sensor_variant_name(self) -> str:
+        """Read the sensor variant and return its ASCII name.
+
+        Returns ``"SCD40"``, ``"SCD41"`` or ``"SCD43"``. Any undocumented
+        variant code is returned as ``"SCD4x (0x<code>)"``.
+
+        .. note::
+            Only available in idle mode.
+
+        """
+        code = self.sensor_variant
+        return _SCD4X_VARIANTS.get(code, f"SCD4x (0x{code:X})")
+
     def stop_periodic_measurement(self) -> None:
         """Stop measurement mode"""
         self._send_command(_SCD4X_STOPPERIODICMEASUREMENT, cmd_delay=0.5)
@@ -270,12 +426,12 @@ class SCD4X:
             * :attr:`CO2 <adafruit_scd4x.SCD4X.CO2>`
             * :attr:`temperature <adafruit_scd4x.SCD4X.temperature>`
             * :attr:`relative_humidity <adafruit_scd4x.SCD4X.relative_humidity>`
-            * :meth:`data_ready() <adafruit_scd4x.SCD4x.data_ready>`
+            * :attr:`data_ready <adafruit_scd4x.SCD4X.data_ready>`
             * :meth:`reinit() <adafruit_scd4x.SCD4X.reinit>`
             * :meth:`factory_reset() <adafruit_scd4x.SCD4X.factory_reset>`
             * :meth:`force_calibration() <adafruit_scd4x.SCD4X.force_calibration>`
             * :meth:`self_test() <adafruit_scd4x.SCD4X.self_test>`
-            * :meth:`set_ambient_pressure() <adafruit_scd4x.SCD4X.set_ambient_pressure>`
+            * :attr:`ambient_pressure <adafruit_scd4x.SCD4X.ambient_pressure>`
 
         """
         self._send_command(_SCD4X_STARTPERIODICMEASUREMENT)
@@ -291,11 +447,36 @@ class SCD4X:
         """Save temperature offset, altitude offset, and selfcal enable settings to EEPROM"""
         self._send_command(_SCD4X_PERSISTSETTINGS, cmd_delay=0.8)
 
-    def set_ambient_pressure(self, ambient_pressure: int) -> None:
-        """Set the ambient pressure in hPa at any time to adjust CO2 calculations"""
-        if ambient_pressure < 0 or ambient_pressure > 65535:
+    @property
+    def ambient_pressure(self) -> int:
+        """The ambient pressure in hPa used to compensate CO2 measurements.
+
+        Setting this enables continuous pressure compensation and may be done at
+        any time, including during periodic measurement. Valid values are ``0``
+        (compensation disabled) through ``65535`` hPa. Setting an ambient
+        pressure overrides any compensation based on a previously set
+        :attr:`altitude`. Multiply by 100 to convert to Pa.
+
+        Get and set share the I2C command ``0xe000``; the read/write bit in the
+        I2C header selects which operation runs.
+
+        .. note::
+            This value will NOT be saved and will be reset on boot unless
+            saved with persist_settings().
+
+        :return: the configured ambient pressure compensation, in hPa
+        :rtype: int
+        :raises AttributeError: if set outside the range 0-65535 hPa
+        """
+        self._send_command(_SCD4X_GETPRESSURE, cmd_delay=0.001)
+        self._read_reply(self._buffer, 3)
+        return (self._buffer[0] << 8) | self._buffer[1]
+
+    @ambient_pressure.setter
+    def ambient_pressure(self, pressure_hpa: int) -> None:
+        if pressure_hpa < 0 or pressure_hpa > 65535:
             raise AttributeError("`ambient_pressure` must be from 0~65535 hPascals")
-        self._set_command_value(_SCD4X_SETPRESSURE, ambient_pressure)
+        self._set_command_value(_SCD4X_SETPRESSURE, pressure_hpa)
 
     @property
     def temperature_offset(self) -> float:
@@ -362,7 +543,9 @@ class SCD4X:
             ) from err
         time.sleep(cmd_delay)
 
-    def _set_command_value(self, cmd, value, cmd_delay=0):
+    def _set_command_value(self, cmd, value, cmd_delay=0.001):
+        # Make cmd_delay 1ms by default. In table 9 of DS virtually every command lists a
+        # 1ms delay unless they specify longer so this catches cmds without a specific delay.
         self._buffer[0] = (cmd >> 8) & 0xFF
         self._buffer[1] = cmd & 0xFF
         self._crc_buffer[0] = self._buffer[2] = (value >> 8) & 0xFF
