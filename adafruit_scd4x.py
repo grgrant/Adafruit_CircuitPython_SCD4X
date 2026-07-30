@@ -478,6 +478,14 @@ class SCD4X:
             raise AttributeError("`ambient_pressure` must be from 0~65535 hPascals")
         self._set_command_value(_SCD4X_SETPRESSURE, pressure_hpa)
 
+    # Keep previous method to not break previous compatibility
+    def set_ambient_pressure(self, ambient_pressure: int) -> None:
+        """Set the ambient pressure in hPa at any time to adjust CO2 calculations
+
+        Deprecated in favor of :attr:`ambient_pressure <adafruit_scd4x.SCD4X.ambient_pressure>`"""
+        self.ambient_pressure = ambient_pressure
+
+
     @property
     def temperature_offset(self) -> float:
         """Specifies the offset to be added to the reported measurements to account for a bias in
