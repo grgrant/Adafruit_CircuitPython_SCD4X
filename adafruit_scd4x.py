@@ -116,6 +116,12 @@ class SCD4X:
 
     .. note::
 
+        Once :meth:`start_periodic_measurement` or :meth:`start_low_periodice_measurement`
+        are run most of the functions and properties except: read_measurement,
+        get_data_ready_status, stop_periodic_measurement, set_ambient_pressure and
+        get_ambient_pressure cause an error when accessed.  If using these after starting
+        measurement first run :meth:`stop_periodic_measurement`
+
         Some features are available on the **SCD41 and SCD43 only**, not the base
         SCD40:
 
