@@ -424,10 +424,10 @@ class SCD4X:
         self._send_command(_SCD4X_STOPPERIODICMEASUREMENT, cmd_delay=0.5)
 
     def start_periodic_measurement(self) -> None:
-        """Put sensor into working mode, about 5s per measurement
+        """Put sensor into periodic measurement mode, about 5s per measurement
 
         .. note::
-            Only the following commands will work once in working mode:
+            Only the following commands will work once in periodic measurement mode:
 
             * :attr:`CO2 <adafruit_scd4x.SCD4X.CO2>`
             * :attr:`temperature <adafruit_scd4x.SCD4X.temperature>`
@@ -443,7 +443,7 @@ class SCD4X:
         self._send_command(_SCD4X_STARTPERIODICMEASUREMENT)
 
     def start_low_periodic_measurement(self) -> None:
-        """Put sensor into low power working mode, about 30s per measurement. See
+        """Put sensor into low power periodic measurement mode, about 30s per measurement. See
         :meth:`start_periodic_measurement() <adafruit_scd4x.SCD4X.start_perodic_measurement>`
         for more details.
         """
@@ -552,7 +552,7 @@ class SCD4X:
         except OSError as err:
             raise RuntimeError(
                 "Could not communicate via I2C, some commands/settings "
-                "unavailable while in working mode"
+                "are not available in periodic measurement mode"
             ) from err
         time.sleep(cmd_delay)
 
@@ -570,7 +570,7 @@ class SCD4X:
         except OSError as err:
             raise RuntimeError(
                 "Could not communicate via I2C, some commands/settings "
-                "unavailable while in working mode"
+                "are not available in periodic measurement mode"
             ) from err
         time.sleep(cmd_delay)
 
