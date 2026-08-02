@@ -564,8 +564,14 @@ class SCD4X:
         self._crc_buffer[0] = self._buffer[2] = (value >> 8) & 0xFF
         self._crc_buffer[1] = self._buffer[3] = value & 0xFF
         self._buffer[4] = self._crc8(self._crc_buffer)
-        with self.i2c_device as i2c:
-            i2c.write(self._buffer, end=5)
+        try:
+            with self.i2c_device as i2c:
+                i2c.write(self._buffer, end=5)
+        except OSError as err:
+            raise RuntimeError(
+                "Could not communicate via I2C, some commands/settings "
+                "unavailable while in working mode"
+            ) from err
         time.sleep(cmd_delay)
 
     def _read_reply(self, buff, num):
