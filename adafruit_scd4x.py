@@ -231,14 +231,24 @@ class SCD4X:
         time.sleep(0.03)  # wake_up execution time
 
     def reinit(self) -> None:
-        """Reinitializes the sensor by reloading user settings from EEPROM."""
+        """Reinitializes the sensor by reloading user settings from EEPROM.
+
+        .. note::
+            Stops periodic_measurement as a side-effect.  Restart if desired.
+
+        """
         self.stop_periodic_measurement()
         # Execution time raised from 20 ms to 30 ms in the v1.7 datasheet (Table 9).
         self._send_command(_SCD4X_REINIT, cmd_delay=0.03)
 
     def factory_reset(self) -> None:
         """Resets all configuration settings stored in the EEPROM and erases the
-        FRC and ASC algorithm history."""
+        FRC and ASC algorithm history.
+
+        .. note::
+            Stops periodic_measurement as a side-effect.  Restart if desired.
+
+        """
         self.stop_periodic_measurement()
         self._send_command(_SCD4X_FACTORYRESET, cmd_delay=1.2)
 
@@ -251,6 +261,10 @@ class SCD4X:
         environment, otherwise the recalibration will fail.
 
         :raises RuntimeError: if the sensor reports that the recalibration failed.
+
+        .. note::
+            Stops periodic_measurement as a side-effect.  Restart if desired.
+
         """
         self.stop_periodic_measurement()
         self._set_command_value(_SCD4X_FORCEDRECAL, target_co2, cmd_delay=0.5)
