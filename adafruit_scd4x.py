@@ -413,6 +413,11 @@ class SCD4X:
         .. note::
             Only available in idle mode.
 
+            The SCD43 is listed with a code of 5 - per the datasheet.  This property is for
+            reading the raw variant code.  Please use
+            :attr:`sensor_variant_name <adafruit_scd4x.SCD4X.sensor_variant_name>`
+            for a translated version of the model number that shows "SCD43".
+
         """
         self._send_command(_SCD4X_GETSENSORVARIANT, cmd_delay=0.001)
         self._read_reply(self._buffer, 3)
